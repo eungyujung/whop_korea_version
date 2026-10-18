@@ -1,0 +1,158 @@
+// PromoPool MVP 스키마 — 웹사이트 링크 홍보(클릭당 보상)
+// 설계 문서: docs/PLAN.md 5장. 금액은 모두 원(KRW) 단위 정수(BigInt).
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// MVP: 한 계정이 광고주·참여자 역할을 모두 할 수 있다 (PLAN 1-1)
+model User {
+  id        String   @id @default(cuid())
+  name      String   @unique // 개발용 로그인 닉네임
+  createdAt DateTime @default(now()) @map("created_at")
+
+  campaigns      Campaign[]
+  participations Participation[]
+  earnings       Earning[]
+
+  @@map("users")
+}
+
+// 수수료율 등 운영 설정값 (코드에 하드코딩하지 않음)
+model PlatformSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_settings")
+}
+
+enum CampaignType {
+  WEB
+  SHORTS
+  GAME
+}
+
+enum CampaignStatus {
+  ACTIVE
+  PAUSED
+  EXHAUSTED
+  ENDED
+}
+
+model Campaign {
+  id             String         @id @default(cuid())
+  advertiserId   String         @map("advertiser_id")
+  type           CampaignType   @default(WEB)
+  title          String
+  description    String         @default("")
+  targetUrl      String         @map("target_url")
+  status         CampaignStatus @default(ACTIVE)
+  budgetTotal    BigInt         @map("budget_total") // 리워드 풀
+  budgetReserved BigInt         @default(0) @map("budget_reserved") // 대기(pending) 보상으로 예약된 금액
+  budgetSpent    BigInt         @default(0) @map("budget_spent") // 확정된 보상 금액
+  rewardPerClick BigInt         @map("reward_per_click")
+  platformFeeBps Int            @map("platform_fee_bps") // 생성 시점 수수료율 (1000 = 10%)
+  feeAmount      BigInt         @map("fee_amount") // 풀과 별도로 받는 수수료
+  pendingDays    Int            @default(7) @map("pending_days")
+  isTest         Boolean        @default(true) @map("is_test")
+  createdAt      DateTime       @default(now()) @map("created_at")
+
+  advertiser     User            @relation(fields: [advertiserId], references: [id])
+  participations Participation[]
+  clicks         Click[]
+  earnings       Earning[]
+
+  @@index([status])
+  @@index([advertiserId])
+  @@map("campaigns")
+}
+
+model Participation {
+  id         String   @id @default(cuid())
+  campaignId String   @map("campaign_id")
+  userId     String   @map("user_id")
+  joinedAt   DateTime @default(now()) @map("joined_at")
+
+  campaign Campaign      @relation(fields: [campaignId], references: [id])
+  user     User          @relation(fields: [userId], references: [id])
+  link     TrackingLink?
+  earnings Earning[]
+
+  @@unique([campaignId, userId])
+  @@map("participations")
+}
+
+model TrackingLink {
+  id              String   @id @default(cuid())
+  participationId String   @unique @map("participation_id")
+  code            String   @unique // /r/{code}
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  participation Participation @relation(fields: [participationId], references: [id])
+  clicks        Click[]
+
+  @@map("tracking_links")
+}
+
+model Click {
+  id            String   @id @default(cuid())
+  clickId       String   @unique @map("click_id") // 리다이렉트 URL에 붙이는 공개 ID
+  linkId        String   @map("link_id")
+  campaignId    String   @map("campaign_id")
+  visitorId     String?  @map("visitor_id") // rw_vid 쿠키
+  ipHash        String   @map("ip_hash")
+  uaHash        String   @map("ua_hash")
+  userAgent     String   @default("") @map("user_agent")
+  referrer      String   @default("")
+  isValid       Boolean  @map("is_valid")
+  invalidReason String?  @map("invalid_reason")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  link     TrackingLink @relation(fields: [linkId], references: [id])
+  campaign Campaign     @relation(fields: [campaignId], references: [id])
+
+  @@index([linkId, visitorId])
+  @@index([linkId, ipHash, uaHash, createdAt])
+  @@map("clicks")
+}
+
+enum EarningSourceType {
+  CLICK
+  SUBMISSION
+  CONVERSION
+}
+
+enum EarningStatus {
+  PENDING
+  CONFIRMED
+  CANCELED
+  PAID
+}
+
+model Earning {
+  id              String            @id @default(cuid())
+  userId          String            @map("user_id")
+  participationId String            @map("participation_id")
+  campaignId      String            @map("campaign_id")
+  sourceType      EarningSourceType @map("source_type")
+  sourceId        String            @map("source_id")
+  amount          BigInt
+  status          EarningStatus     @default(PENDING)
+  confirmAfter    DateTime          @map("confirm_after")
+  isTest          Boolean           @default(true) @map("is_test")
+  createdAt       DateTime          @default(now()) @map("created_at")
+
+  user          User          @relation(fields: [userId], references: [id])
+  participation Participation @relation(fields: [participationId], references: [id])
+  campaign      Campaign      @relation(fields: [campaignId], references: [id])
+
+  @@unique([sourceType, sourceId])
+  @@index([userId, status])
+  @@map("earnings")
+}
